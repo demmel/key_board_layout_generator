@@ -93,11 +93,7 @@ impl Stats {
 
 fn process_log(path: &str) -> Stats {
     let mut stats = Stats::new();
-
-    let mut prev_keys = HashSet::new();
-    let mut keys = HashSet::new();
-
-    let mut prev_char = None;
+    let mut key_processor = KeyProcessor::new();
 
     let reader = BufReader::new(File::open(path).unwrap());
 
@@ -107,10 +103,34 @@ fn process_log(path: &str) -> Stats {
         let (key_code, press) = line.split_once(" ").unwrap();
         let key_code = Keycode::from_str(key_code).unwrap();
         let press = press == "1";
+        key_processor.process_key(key_code, press, &mut stats);
+    }
+
+    stats
+}
+
+struct KeyProcessor {
+    prev_keys: HashSet<Keycode>,
+    keys: HashSet<Keycode>,
+    prev_char: Option<char>,
+}
+
+impl KeyProcessor {
+    fn new() -> Self {
+        Self {
+            prev_keys: HashSet::new(),
+            keys: HashSet::new(),
+            prev_char: None,
+        }
+    }
+
+    fn process_key(&mut self, key_code: Keycode, press: bool, stats: &mut Stats) {
+        {}
         if press {
-            keys.insert(key_code);
+            self.keys.insert(key_code);
             let count = stats.individual_key_counts.entry(key_code).or_insert(0);
             *count += 1;
+            let prev_keys = std::mem::replace(&mut self.prev_keys, self.keys.clone());
             for prev in prev_keys {
                 let count = stats
                     .consectutive_key_counts
@@ -118,34 +138,32 @@ fn process_log(path: &str) -> Stats {
                     .or_insert(0);
                 *count += 1;
             }
-            prev_keys = keys.clone();
-            let shift_held = keys.contains(&Keycode::LShift) || keys.contains(&Keycode::RShift);
+            let shift_held =
+                self.keys.contains(&Keycode::LShift) || self.keys.contains(&Keycode::RShift);
             if let Some(c) = translate_key_to_char(&key_code, shift_held) {
                 let count = stats.char_counts.entry(c).or_insert(0);
                 *count += 1;
 
-                if let Some(prev_char) = prev_char {
+                if let Some(prev_char) = self.prev_char {
                     let count = stats
                         .consecutive_char_counts
                         .entry((prev_char, c))
                         .or_insert(0);
                     *count += 1;
                 }
-                prev_char = Some(c);
+                self.prev_char = Some(c);
             }
         } else {
-            keys.remove(&key_code);
+            self.keys.remove(&key_code);
         }
 
-        if keys.len() > 1 {
-            let mut held: Vec<_> = keys.iter().cloned().collect();
+        if self.keys.len() > 1 {
+            let mut held: Vec<_> = self.keys.iter().cloned().collect();
             held.sort_by_key(|x| x.to_string());
             let count = stats.simultaneous_key_counts.entry(held).or_insert(0);
             *count += 1;
         }
     }
-
-    stats
 }
 
 fn translate_key_to_char(key: &Keycode, shift_held: bool) -> Option<char> {
