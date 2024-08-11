@@ -16,12 +16,12 @@ fn main() {
     let mut consectutive_key_counts = HashMap::new();
     let mut simultaneous_key_counts = HashMap::new();
 
+    let mut prev_keys = HashSet::new();
     let mut keys = HashSet::new();
 
     let reader = BufReader::new(File::open("../keylogger/keys.log").unwrap());
 
     for line in reader.lines() {
-        let prev_keys = keys.clone();
         let line = line.unwrap();
         log_lines_read += 1;
         let (key_code, press) = line.split_once(" ").unwrap();
@@ -35,6 +35,7 @@ fn main() {
                 let count = consectutive_key_counts.entry((prev, key_code)).or_insert(0);
                 *count += 1;
             }
+            prev_keys = keys.clone();
         } else {
             keys.remove(&key_code);
         }
@@ -47,15 +48,24 @@ fn main() {
         }
     }
 
+    let mut individual_key_counts: Vec<_> = individual_key_counts.into_iter().collect();
+    individual_key_counts.sort_by_key(|x| std::cmp::Reverse(x.1));
+
     println!("Individual key counts:");
     for (key, count) in individual_key_counts {
         println!("{:?}: {}", key, count);
     }
 
+    let mut consectutive_key_counts: Vec<_> = consectutive_key_counts.into_iter().collect();
+    consectutive_key_counts.sort_by_key(|x| std::cmp::Reverse(x.1));
+
     println!("\nConsecutive key counts:");
     for (keys, count) in consectutive_key_counts {
         println!("{:?} -> {:?}: {}", keys.0, keys.1, count);
     }
+
+    let mut simultaneous_key_counts: Vec<_> = simultaneous_key_counts.into_iter().collect();
+    simultaneous_key_counts.sort_by_key(|x| std::cmp::Reverse(x.1));
 
     println!("\nSimultaneous key counts:");
     for (keys, count) in simultaneous_key_counts {
