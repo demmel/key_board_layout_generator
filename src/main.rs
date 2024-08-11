@@ -40,7 +40,7 @@ fn main() {
             keys.remove(&key_code);
         }
 
-        if !keys.is_empty() {
+        if keys.len() > 1 {
             let mut held: Vec<_> = keys.iter().cloned().collect();
             held.sort_by_key(|x| x.to_string());
             let count = simultaneous_key_counts.entry(held).or_insert(0);
