@@ -11,32 +11,10 @@ fn main() {
     let start = std::time::Instant::now();
 
     let stats = process_log("../keylogger/keys.log");
-
-    let mut individual_key_counts: Vec<_> = stats.individual_key_counts.into_iter().collect();
-    individual_key_counts.sort_by_key(|x| std::cmp::Reverse(x.1));
-
-    println!("Individual key counts:");
-    for (key, count) in individual_key_counts {
-        println!("{:?}: {}", key, count);
-    }
-
-    let mut consectutive_key_counts: Vec<_> = stats.consectutive_key_counts.into_iter().collect();
-    consectutive_key_counts.sort_by_key(|x| std::cmp::Reverse(x.1));
-
-    println!("\nConsecutive key counts:");
-    for (keys, count) in consectutive_key_counts {
-        println!("{:?} -> {:?}: {}", keys.0, keys.1, count);
-    }
-
-    let mut simultaneous_key_counts: Vec<_> = stats.simultaneous_key_counts.into_iter().collect();
-    simultaneous_key_counts.sort_by_key(|x| std::cmp::Reverse(x.1));
-
-    println!("\nSimultaneous key counts:");
-    for (keys, count) in simultaneous_key_counts {
-        println!("{:?}: {}", keys, count);
-    }
+    print_statistics(&stats);
 
     let elapsed = start.elapsed();
+
     println!(
         "\nProcessed {} log lines in {}.{:03} seconds",
         stats.total_log_lines,
@@ -47,6 +25,32 @@ fn main() {
         "{} lines per second",
         stats.total_log_lines as f64 / elapsed.as_secs_f64()
     );
+}
+
+fn print_statistics(stats: &Stats) {
+    let mut individual_key_counts: Vec<_> = stats.individual_key_counts.iter().collect();
+    individual_key_counts.sort_by_key(|x| std::cmp::Reverse(x.1));
+
+    println!("Individual key counts:");
+    for (key, count) in individual_key_counts {
+        println!("{:?}: {}", key, count);
+    }
+
+    let mut consectutive_key_counts: Vec<_> = stats.consectutive_key_counts.iter().collect();
+    consectutive_key_counts.sort_by_key(|x| std::cmp::Reverse(x.1));
+
+    println!("\nConsecutive key counts:");
+    for (keys, count) in consectutive_key_counts {
+        println!("{:?} -> {:?}: {}", keys.0, keys.1, count);
+    }
+
+    let mut simultaneous_key_counts: Vec<_> = stats.simultaneous_key_counts.iter().collect();
+    simultaneous_key_counts.sort_by_key(|x| std::cmp::Reverse(x.1));
+
+    println!("\nSimultaneous key counts:");
+    for (keys, count) in simultaneous_key_counts {
+        println!("{:?}: {}", keys, count);
+    }
 }
 
 struct Stats {
