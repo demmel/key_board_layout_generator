@@ -59,11 +59,20 @@ fn print_statistics(stats: &Stats) {
     for (c, count) in char_counts {
         println!("{}: {}", c, count);
     }
+
+    let mut consecutive_char_counts: Vec<_> = stats.consecutive_char_counts.iter().collect();
+    consecutive_char_counts.sort_by_key(|x| std::cmp::Reverse(x.1));
+
+    println!("\nConsecutive character counts:");
+    for (chars, count) in consecutive_char_counts {
+        println!("{:?} -> {:?}: {}", chars.0, chars.1, count);
+    }
 }
 
 struct Stats {
     total_log_lines: u64,
     char_counts: HashMap<char, u64>,
+    consecutive_char_counts: HashMap<(char, char), u64>,
     individual_key_counts: HashMap<Keycode, u64>,
     consectutive_key_counts: HashMap<(Keycode, Keycode), u64>,
     simultaneous_key_counts: HashMap<Vec<Keycode>, u64>,
@@ -74,6 +83,7 @@ impl Stats {
         Self {
             total_log_lines: 0,
             char_counts: HashMap::new(),
+            consecutive_char_counts: HashMap::new(),
             individual_key_counts: HashMap::new(),
             consectutive_key_counts: HashMap::new(),
             simultaneous_key_counts: HashMap::new(),
@@ -86,6 +96,8 @@ fn process_log(path: &str) -> Stats {
 
     let mut prev_keys = HashSet::new();
     let mut keys = HashSet::new();
+
+    let mut prev_char = None;
 
     let reader = BufReader::new(File::open(path).unwrap());
 
@@ -219,6 +231,15 @@ fn process_log(path: &str) -> Stats {
                 };
                 let count = stats.char_counts.entry(c).or_insert(0);
                 *count += 1;
+
+                if let Some(prev_char) = prev_char {
+                    let count = stats
+                        .consecutive_char_counts
+                        .entry((prev_char, c))
+                        .or_insert(0);
+                    *count += 1;
+                }
+                prev_char = Some(c);
             }
         }
     }
