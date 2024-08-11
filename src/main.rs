@@ -10,45 +10,9 @@ use device_query::Keycode;
 fn main() {
     let start = std::time::Instant::now();
 
-    let mut log_lines_read = 0;
+    let stats = process_log("../keylogger/keys.log");
 
-    let mut individual_key_counts = HashMap::new();
-    let mut consectutive_key_counts = HashMap::new();
-    let mut simultaneous_key_counts = HashMap::new();
-
-    let mut prev_keys = HashSet::new();
-    let mut keys = HashSet::new();
-
-    let reader = BufReader::new(File::open("../keylogger/keys.log").unwrap());
-
-    for line in reader.lines() {
-        let line = line.unwrap();
-        log_lines_read += 1;
-        let (key_code, press) = line.split_once(" ").unwrap();
-        let key_code = Keycode::from_str(key_code).unwrap();
-        let press = press == "1";
-        if press {
-            keys.insert(key_code);
-            let count = individual_key_counts.entry(key_code).or_insert(0);
-            *count += 1;
-            for prev in prev_keys {
-                let count = consectutive_key_counts.entry((prev, key_code)).or_insert(0);
-                *count += 1;
-            }
-            prev_keys = keys.clone();
-        } else {
-            keys.remove(&key_code);
-        }
-
-        if keys.len() > 1 {
-            let mut held: Vec<_> = keys.iter().cloned().collect();
-            held.sort_by_key(|x| x.to_string());
-            let count = simultaneous_key_counts.entry(held).or_insert(0);
-            *count += 1;
-        }
-    }
-
-    let mut individual_key_counts: Vec<_> = individual_key_counts.into_iter().collect();
+    let mut individual_key_counts: Vec<_> = stats.individual_key_counts.into_iter().collect();
     individual_key_counts.sort_by_key(|x| std::cmp::Reverse(x.1));
 
     println!("Individual key counts:");
@@ -56,7 +20,7 @@ fn main() {
         println!("{:?}: {}", key, count);
     }
 
-    let mut consectutive_key_counts: Vec<_> = consectutive_key_counts.into_iter().collect();
+    let mut consectutive_key_counts: Vec<_> = stats.consectutive_key_counts.into_iter().collect();
     consectutive_key_counts.sort_by_key(|x| std::cmp::Reverse(x.1));
 
     println!("\nConsecutive key counts:");
@@ -64,7 +28,7 @@ fn main() {
         println!("{:?} -> {:?}: {}", keys.0, keys.1, count);
     }
 
-    let mut simultaneous_key_counts: Vec<_> = simultaneous_key_counts.into_iter().collect();
+    let mut simultaneous_key_counts: Vec<_> = stats.simultaneous_key_counts.into_iter().collect();
     simultaneous_key_counts.sort_by_key(|x| std::cmp::Reverse(x.1));
 
     println!("\nSimultaneous key counts:");
@@ -75,12 +39,71 @@ fn main() {
     let elapsed = start.elapsed();
     println!(
         "\nProcessed {} log lines in {}.{:03} seconds",
-        log_lines_read,
+        stats.total_log_lines,
         elapsed.as_secs(),
         elapsed.subsec_millis()
     );
     println!(
         "{} lines per second",
-        log_lines_read as f64 / elapsed.as_secs_f64()
+        stats.total_log_lines as f64 / elapsed.as_secs_f64()
     );
+}
+
+struct Stats {
+    total_log_lines: u64,
+    individual_key_counts: HashMap<Keycode, u64>,
+    consectutive_key_counts: HashMap<(Keycode, Keycode), u64>,
+    simultaneous_key_counts: HashMap<Vec<Keycode>, u64>,
+}
+
+impl Stats {
+    fn new() -> Self {
+        Self {
+            total_log_lines: 0,
+            individual_key_counts: HashMap::new(),
+            consectutive_key_counts: HashMap::new(),
+            simultaneous_key_counts: HashMap::new(),
+        }
+    }
+}
+
+fn process_log(path: &str) -> Stats {
+    let mut stats = Stats::new();
+
+    let mut prev_keys = HashSet::new();
+    let mut keys = HashSet::new();
+
+    let reader = BufReader::new(File::open(path).unwrap());
+
+    for line in reader.lines() {
+        stats.total_log_lines += 1;
+        let line = line.unwrap();
+        let (key_code, press) = line.split_once(" ").unwrap();
+        let key_code = Keycode::from_str(key_code).unwrap();
+        let press = press == "1";
+        if press {
+            keys.insert(key_code);
+            let count = stats.individual_key_counts.entry(key_code).or_insert(0);
+            *count += 1;
+            for prev in prev_keys {
+                let count = stats
+                    .consectutive_key_counts
+                    .entry((prev, key_code))
+                    .or_insert(0);
+                *count += 1;
+            }
+            prev_keys = keys.clone();
+        } else {
+            keys.remove(&key_code);
+        }
+
+        if keys.len() > 1 {
+            let mut held: Vec<_> = keys.iter().cloned().collect();
+            held.sort_by_key(|x| x.to_string());
+            let count = stats.simultaneous_key_counts.entry(held).or_insert(0);
+            *count += 1;
+        }
+    }
+
+    stats
 }
