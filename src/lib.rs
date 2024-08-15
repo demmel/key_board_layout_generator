@@ -6,6 +6,7 @@ use std::{
 };
 
 use device_query::Keycode;
+use serde::{Deserialize, Serialize};
 
 pub struct Stats {
     pub total_log_lines: u64,
@@ -204,4 +205,89 @@ fn translate_key_to_char(key: &Keycode, shift_held: bool) -> Option<char> {
         _ => return None,
     };
     Some(c)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct KeymapConfig {
+    pub fingers: HashMap<Finger, FingerConfig>,
+    pub keys: Vec<KeyConfig>,
+}
+
+impl Default for KeymapConfig {
+    fn default() -> Self {
+        let mut fingers = HashMap::new();
+        for finger in &[
+            Finger::LeftPinky,
+            Finger::LeftRing,
+            Finger::LeftMiddle,
+            Finger::LeftIndex,
+            Finger::LeftThumb,
+            Finger::RightThumb,
+            Finger::RightIndex,
+            Finger::RightMiddle,
+            Finger::RightRing,
+            Finger::RightPinky,
+        ] {
+            fingers.insert(*finger, FingerConfig::default());
+        }
+        Self {
+            fingers,
+            keys: vec![],
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct KeyConfig {
+    pub code: SerializableKeycode,
+    pub finger: Finger,
+    pub score_multiplier: f64,
+}
+
+#[derive(Debug)]
+pub struct SerializableKeycode(pub Keycode);
+
+impl Serialize for SerializableKeycode {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.to_string().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SerializableKeycode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let code = Keycode::from_str(s.as_str()).map_err(serde::de::Error::custom)?;
+        Ok(SerializableKeycode(code))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum Finger {
+    LeftPinky,
+    LeftRing,
+    LeftMiddle,
+    LeftIndex,
+    LeftThumb,
+    RightThumb,
+    RightIndex,
+    RightMiddle,
+    RightRing,
+    RightPinky,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FingerConfig {
+    pub score: f64,
+}
+
+impl Default for FingerConfig {
+    fn default() -> Self {
+        Self { score: 1.0 }
+    }
 }
