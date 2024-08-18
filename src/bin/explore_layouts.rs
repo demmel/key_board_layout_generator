@@ -2,11 +2,16 @@ use clap::Parser;
 use device_query::Keycode;
 use genetic::{Crossover, DiversifyStrategy, Gen, Mutate};
 use keyboard_layout_generator::{
-    layout_format::parse_keymap_config,
+    layout_format::{map_keycode_to_str, parse_keymap_config, write_grid, GridItem},
     stats::{process_log, Stats},
     Finger, FingerKind, KeymapConfig, PhysicalKey,
 };
-use rand::seq::SliceRandom;
+use rand::{seq::SliceRandom, Rng};
+use rayon::prelude::*;
+use std::{
+    collections::HashSet,
+    io::{BufWriter, Write},
+};
 
 #[derive(Parser)]
 struct Args {
@@ -20,26 +25,120 @@ fn main() {
     println!("Max Possible Score: {}", max_possible_score(&stats));
     let keymap_str = std::fs::read_to_string(&args.keymap_config).unwrap();
     let keymap_config = parse_keymap_config(&keymap_str);
-    let mut rng = rand::thread_rng();
     let mut population = (0..1000)
+        .map(|_| Layout::gen(&mut rand::thread_rng(), &keymap_config))
+        .collect::<Vec<_>>();
+    loop {
+        println!("Annealing");
+        population.par_iter_mut().for_each(|layout| {
+            *layout = simmulated_annealing(&stats, &keymap_config, 0.0001, layout.clone());
+        });
+        println!("Genetic");
+        let (new_population, gstats) = genetic::evolve(
+            &population,
+            &keymap_config,
+            |layout| layout_score(layout, &stats, &keymap_config) as f32,
+            layout_similarity,
+            DiversifyStrategy::HalfAreRandom,
+        );
+        let best = &new_population[0];
+        save_best(&keymap_config, best);
+        println!(
+            "Max: {}, Mean: {}, Min: {}, Div: {}",
+            gstats.max, gstats.mean, gstats.min, gstats.diversity,
+        );
+        population = new_population;
+    }
+}
+
+fn genetic_algorithm(stats: &Stats, keymap_config: &KeymapConfig) {
+    let mut rng = rand::thread_rng();
+    let mut population = (0..10000)
         .map(|_| Layout::gen(&mut rng, &keymap_config))
         .collect::<Vec<_>>();
     let mut generation = 0;
     loop {
-        let (new_population, stats) = genetic::evolve(
-            &mut population,
-            &keymap_config,
-            |l| layout_score(l, &stats, &keymap_config) as f32,
-            |l1, l2| layout_similarity(l1, l2),
-            DiversifyStrategy::None,
+        let (new_population, gstats) = genetic::evolve(
+            &population,
+            keymap_config,
+            |layout| layout_score(layout, stats, keymap_config) as f32,
+            layout_similarity,
+            DiversifyStrategy::HalfAreRandom,
         );
         population = new_population;
+        let best = &population[0];
+        save_best(keymap_config, best);
         println!(
-            "Generation: {}, Mean: {}, Max: {}, Min: {}, Std Dev: {}, Diversity: {}",
-            generation, stats.mean, stats.max, stats.min, stats.std_dev, stats.diversity
+            "G: {}, Max: {}, Mean: {}, Min: {}, Div: {}",
+            generation, gstats.max, gstats.mean, gstats.min, gstats.diversity,
         );
         generation += 1;
     }
+}
+
+fn save_best(keymap_config: &KeymapConfig, best: &Layout) {
+    let rows = keymap_config
+        .keys
+        .keys()
+        .iter()
+        .map(|key| key.position.1 as u8)
+        .max()
+        .unwrap()
+        + 1;
+    let cols = keymap_config
+        .keys
+        .keys()
+        .iter()
+        .map(|key| key.position.0 as u8)
+        .max()
+        .unwrap()
+        + 1;
+
+    let mut best_grid = vec![vec![None; cols as usize]; rows as usize];
+    for (key, config) in best.keys.iter().zip(keymap_config.keys.keys().iter()) {
+        best_grid[config.position.1 as usize][config.position.0 as usize] = Some(key.clone());
+    }
+
+    let mut best_str = String::new();
+    write_grid(best_grid, &mut best_str, cols).unwrap();
+    let mut writer = BufWriter::new(std::fs::File::create(format!("best.txt")).unwrap());
+    writer.write_all(best_str.as_bytes()).unwrap();
+}
+
+fn simmulated_annealing(
+    stats: &Stats,
+    keymap_config: &KeymapConfig,
+    min_temperature: f64,
+    initial_layout: Layout,
+) -> Layout {
+    let mut rng = rand::thread_rng();
+    let mut layout = initial_layout;
+    let mut score = layout_score(&layout, &stats, &keymap_config);
+    let mut temperature = 1.0;
+    let mut best_layout = layout.clone();
+    let mut best_score = score;
+    loop {
+        let mut new_layout = layout.clone();
+        let i = rng.gen_range(0..new_layout.keys.len());
+        let j = rng.gen_range(0..new_layout.keys.len());
+        new_layout.keys.swap(i, j);
+        let new_score = layout_score(&new_layout, &stats, &keymap_config);
+        if new_score > best_score {
+            best_layout = new_layout.clone();
+            best_score = new_score;
+        }
+        let delta = new_score - score;
+        let normalized_delta = delta / max_possible_score(&stats);
+        if delta > 0.0 || rng.gen_bool((normalized_delta / temperature).exp()) {
+            layout = new_layout;
+            score = new_score;
+        }
+        temperature *= 0.9999;
+        if temperature < min_temperature {
+            break;
+        }
+    }
+    best_layout
 }
 
 fn max_possible_score(stats: &Stats) -> f64 {
@@ -50,7 +149,9 @@ fn max_possible_score(stats: &Stats) -> f64 {
     for count in stats.consectutive_key_counts.values() {
         score += *count as f64;
     }
-    score * 100.0
+    let n_intuitions = intuitions().len() as f64;
+    score += n_intuitions * 100.0;
+    score
 }
 
 fn layout_similarity(l1: &Layout, l2: &Layout) -> f32 {
@@ -73,8 +174,229 @@ fn layout_similarity(l1: &Layout, l2: &Layout) -> f32 {
 fn layout_score(layout: &Layout, stats: &Stats, keymap_config: &KeymapConfig) -> f64 {
     let individual_key_score = layout_individual_key_score(layout, stats, keymap_config);
     let consecutive_key_score = layout_consecutive_key_score(layout, stats, keymap_config);
+    let intuition_score = intuition_score(layout, keymap_config, &intuitions());
 
-    individual_key_score + consecutive_key_score
+    individual_key_score + consecutive_key_score + 100.0 * intuition_score
+}
+
+struct IntuitionPair(Key, Key);
+
+impl IntuitionPair {
+    fn physical_keys<'a>(
+        &self,
+        layout: &Layout,
+        keymap_config: &'a KeymapConfig,
+    ) -> (&'a PhysicalKey, &'a PhysicalKey) {
+        (
+            get_physical_key_for_key(layout, keymap_config, &self.0).clone(),
+            get_physical_key_for_key(layout, keymap_config, &self.1).clone(),
+        )
+    }
+}
+
+enum Intuition {
+    Close(IntuitionPair),
+    Symmetric(IntuitionPair),
+    SameRow(IntuitionPair),
+    SameColumn(IntuitionPair),
+    LeftOf(IntuitionPair),
+    RightOf(IntuitionPair),
+    Above(IntuitionPair),
+    Below(IntuitionPair),
+    Or(Box<Intuition>, Box<Intuition>),
+    And(Box<Intuition>, Box<Intuition>),
+}
+
+impl Intuition {
+    fn or(self, other: Self) -> Self {
+        Self::Or(Box::new(self), Box::new(other))
+    }
+
+    fn and(self, other: Self) -> Self {
+        Self::And(Box::new(self), Box::new(other))
+    }
+
+    fn satisfied(&self, layout: &Layout, keymap_config: &KeymapConfig) -> bool {
+        match self {
+            Intuition::Close(pair) => {
+                let (key1, key2) = pair.physical_keys(layout, keymap_config);
+                distance(key1, key2) < 1.1
+            }
+            Intuition::Symmetric(pair) => {
+                let (key1, key2) = pair.physical_keys(layout, keymap_config);
+                are_symmetric(keymap_config, key1.position, key2.position)
+            }
+            Intuition::SameRow(pair) => {
+                let (key1, key2) = pair.physical_keys(layout, keymap_config);
+                key1.position.1 == key2.position.1
+            }
+            Intuition::SameColumn(pair) => {
+                let (key1, key2) = pair.physical_keys(layout, keymap_config);
+                key1.position.0 == key2.position.0
+            }
+            Intuition::LeftOf(pair) => {
+                let (key1, key2) = pair.physical_keys(layout, keymap_config);
+                key1.position.0 < key2.position.0
+            }
+            Intuition::RightOf(pair) => {
+                let (key1, key2) = pair.physical_keys(layout, keymap_config);
+                key1.position.0 > key2.position.0
+            }
+            Intuition::Above(pair) => {
+                let (key1, key2) = pair.physical_keys(layout, keymap_config);
+                key1.position.1 < key2.position.1
+            }
+            Intuition::Below(pair) => {
+                let (key1, key2) = pair.physical_keys(layout, keymap_config);
+                key1.position.1 > key2.position.1
+            }
+            Intuition::Or(a, b) => {
+                a.satisfied(layout, keymap_config) || b.satisfied(layout, keymap_config)
+            }
+            Intuition::And(a, b) => {
+                a.satisfied(layout, keymap_config) && b.satisfied(layout, keymap_config)
+            }
+        }
+    }
+}
+
+fn intuition_score(layout: &Layout, keymap_config: &KeymapConfig, intuitions: &[Intuition]) -> f64 {
+    let mut score = 0.0;
+    for intuition in intuitions {
+        if intuition.satisfied(layout, keymap_config) {
+            score += 1.0;
+        }
+    }
+    score
+}
+
+fn intuitions() -> Vec<Intuition> {
+    vec![
+        Intuition::and(
+            Intuition::SameRow(IntuitionPair(Key::Left, Key::Right)),
+            Intuition::LeftOf(IntuitionPair(Key::Left, Key::Right)),
+        ),
+        Intuition::and(
+            Intuition::SameColumn(IntuitionPair(Key::Up, Key::Down)),
+            Intuition::Above(IntuitionPair(Key::Up, Key::Down)),
+        ),
+        Intuition::or(
+            Intuition::Close(IntuitionPair(Key::Left, Key::Right)),
+            Intuition::Symmetric(IntuitionPair(Key::Left, Key::Right)),
+        ),
+        Intuition::or(
+            Intuition::Close(IntuitionPair(Key::Home, Key::End)),
+            Intuition::Symmetric(IntuitionPair(Key::Home, Key::End)),
+        ),
+        Intuition::or(
+            Intuition::Close(IntuitionPair(Key::PageUp, Key::PageDown)),
+            Intuition::Symmetric(IntuitionPair(Key::PageUp, Key::PageDown)),
+        ),
+        Intuition::or(
+            Intuition::Close(IntuitionPair(
+                Key::from_char_default_shifted('['),
+                Key::from_char_default_shifted(']'),
+            )),
+            Intuition::Symmetric(IntuitionPair(
+                Key::from_char_default_shifted('['),
+                Key::from_char_default_shifted(']'),
+            )),
+        ),
+        Intuition::Symmetric(IntuitionPair(Key::LShift, Key::RShift)),
+        Intuition::Symmetric(IntuitionPair(Key::LCtrl, Key::RCtrl)),
+        Intuition::Close(IntuitionPair(
+            Key::from_char_default_shifted('1'),
+            Key::from_char_default_shifted('2'),
+        )),
+        Intuition::Close(IntuitionPair(
+            Key::from_char_default_shifted('2'),
+            Key::from_char_default_shifted('3'),
+        )),
+        Intuition::Close(IntuitionPair(
+            Key::from_char_default_shifted('3'),
+            Key::from_char_default_shifted('4'),
+        )),
+        Intuition::Close(IntuitionPair(
+            Key::from_char_default_shifted('4'),
+            Key::from_char_default_shifted('5'),
+        )),
+        Intuition::Close(IntuitionPair(
+            Key::from_char_default_shifted('5'),
+            Key::from_char_default_shifted('6'),
+        )),
+        Intuition::Close(IntuitionPair(
+            Key::from_char_default_shifted('6'),
+            Key::from_char_default_shifted('7'),
+        )),
+        Intuition::Close(IntuitionPair(
+            Key::from_char_default_shifted('7'),
+            Key::from_char_default_shifted('8'),
+        )),
+        Intuition::Close(IntuitionPair(
+            Key::from_char_default_shifted('8'),
+            Key::from_char_default_shifted('9'),
+        )),
+        Intuition::Close(IntuitionPair(
+            Key::from_char_default_shifted('9'),
+            Key::from_char_default_shifted('0'),
+        )),
+        Intuition::Close(IntuitionPair(
+            Key::from_char_default_shifted('1'),
+            Key::from_char_default_shifted('4'),
+        )),
+        Intuition::Close(IntuitionPair(
+            Key::from_char_default_shifted('2'),
+            Key::from_char_default_shifted('5'),
+        )),
+        Intuition::Close(IntuitionPair(
+            Key::from_char_default_shifted('3'),
+            Key::from_char_default_shifted('6'),
+        )),
+        Intuition::Close(IntuitionPair(
+            Key::from_char_default_shifted('4'),
+            Key::from_char_default_shifted('7'),
+        )),
+        Intuition::Close(IntuitionPair(
+            Key::from_char_default_shifted('5'),
+            Key::from_char_default_shifted('8'),
+        )),
+        Intuition::Close(IntuitionPair(
+            Key::from_char_default_shifted('6'),
+            Key::from_char_default_shifted('9'),
+        )),
+    ]
+}
+
+fn are_symmetric(config: &KeymapConfig, pos1: (f64, f64), pos2: (f64, f64)) -> bool {
+    if pos1.1 != pos2.1 {
+        return false;
+    }
+
+    let max = config
+        .keys
+        .keys()
+        .iter()
+        .map(|k| k.position.0)
+        .max_by(|a, b| a.partial_cmp(b).unwrap())
+        .unwrap();
+    let smaller = pos1.0.min(pos2.0);
+    let larger = pos1.0.max(pos2.0);
+
+    (max - larger - smaller).abs() < 0.01
+}
+
+fn get_physical_key_for_key<'a>(
+    layout: &Layout,
+    config: &'a KeymapConfig,
+    key: &Key,
+) -> &'a PhysicalKey {
+    layout
+        .keys
+        .iter()
+        .zip(config.keys.keys().iter())
+        .find(|(k, _)| *k == key)
+        .unwrap()
+        .1
 }
 
 fn layout_consecutive_key_score(
@@ -141,6 +463,24 @@ fn consecutive_finger_score(f1: Finger, f2: Finger, distance: f64) -> f64 {
         return 1.0;
     }
 
+    let synergy = match (f1.finger, f2.finger) {
+        (FingerKind::Pinky, FingerKind::Pinky) => 0.1,
+        (FingerKind::Pinky, FingerKind::Ring) | (FingerKind::Ring, FingerKind::Pinky) => 0.2,
+        (FingerKind::Pinky, FingerKind::Middle) | (FingerKind::Middle, FingerKind::Pinky) => 0.2,
+        (FingerKind::Pinky, FingerKind::Index) | (FingerKind::Index, FingerKind::Pinky) => 0.5,
+        (FingerKind::Pinky, FingerKind::Thumb) | (FingerKind::Thumb, FingerKind::Pinky) => 0.6,
+        (FingerKind::Ring, FingerKind::Ring) => 0.1,
+        (FingerKind::Ring, FingerKind::Middle) | (FingerKind::Middle, FingerKind::Ring) => 0.3,
+        (FingerKind::Ring, FingerKind::Index) | (FingerKind::Index, FingerKind::Ring) => 0.3,
+        (FingerKind::Ring, FingerKind::Thumb) | (FingerKind::Thumb, FingerKind::Ring) => 0.2,
+        (FingerKind::Middle, FingerKind::Middle) => 0.2,
+        (FingerKind::Middle, FingerKind::Index) | (FingerKind::Index, FingerKind::Middle) => 0.7,
+        (FingerKind::Middle, FingerKind::Thumb) | (FingerKind::Thumb, FingerKind::Middle) => 0.7,
+        (FingerKind::Index, FingerKind::Index) => 0.3,
+        (FingerKind::Index, FingerKind::Thumb) | (FingerKind::Thumb, FingerKind::Index) => 0.9,
+        (FingerKind::Thumb, FingerKind::Thumb) => 0.3,
+    };
+
     let distance_importance = match (f1.finger, f2.finger) {
         (FingerKind::Pinky, FingerKind::Pinky) => 1.0,
         (FingerKind::Pinky, FingerKind::Ring) | (FingerKind::Ring, FingerKind::Pinky) => 0.9,
@@ -160,7 +500,8 @@ fn consecutive_finger_score(f1: Finger, f2: Finger, distance: f64) -> f64 {
     };
 
     let raw_score = 1.0 / (distance as f64 + 1.0);
-    1.0 * (1.0 - distance_importance) + raw_score * distance_importance
+    let distance_score = 1.0 * (1.0 - distance_importance) + raw_score * distance_importance;
+    distance_score * synergy
 }
 
 #[derive(Clone, Debug)]
@@ -201,8 +542,8 @@ impl Gen for Layout {
                 Keycode::Down => Key::Down,
                 Keycode::Delete => Key::Delete,
                 _ => Key::Normal {
-                    normal: keycode_to_char(p.code, false),
-                    shifted: keycode_to_char(p.code, true),
+                    normal: keycode_to_char(p.code),
+                    shifted: default_shifted(keycode_to_char(p.code)),
                 },
             })
             .collect::<Vec<_>>();
@@ -217,92 +558,55 @@ impl Crossover for Layout {
         let mut child2 = Vec::with_capacity(self.keys.len());
         for (key1, key2) in self.keys.iter().zip(other.keys.iter()) {
             let (child1_key, child2_key) = {
-                match (key1, key2) {
-                    (
-                        Key::Normal {
-                            normal: p1_normal,
-                            shifted: p1_shifted,
-                        },
-                        Key::Normal {
-                            normal: p2_normal,
-                            shifted: p2_shifted,
-                        },
-                    ) => {
-                        let (normal1, noraml2) = if rng.gen_bool(0.5) {
-                            (p1_normal, p2_normal)
-                        } else {
-                            (p2_normal, p1_normal)
-                        };
-                        let (shifted1, shifted2) = if rng.gen_bool(0.5) {
-                            (p1_shifted, p2_shifted)
-                        } else {
-                            (p2_shifted, p1_shifted)
-                        };
-                        (
-                            Key::Normal {
-                                normal: *normal1,
-                                shifted: *shifted1,
-                            },
-                            Key::Normal {
-                                normal: *noraml2,
-                                shifted: *shifted2,
-                            },
-                        )
-                    }
-                    _ => {
-                        if rng.gen_bool(0.5) {
-                            (*key1, *key2)
-                        } else {
-                            (*key2, *key1)
-                        }
-                    }
+                if rng.gen_bool(0.5) {
+                    (*key1, *key2)
+                } else {
+                    (*key2, *key1)
                 }
             };
             child1.push(child1_key);
             child2.push(child2_key);
         }
+        fix_missing_keys(&mut child1, &self.keys);
+        fix_missing_keys(&mut child2, &self.keys);
         (Self { keys: child1 }, Self { keys: child2 })
     }
+}
+
+fn fix_missing_keys(child: &mut Vec<Key>, parent: &Vec<Key>) {
+    let all_keys: HashSet<Key> = parent.iter().cloned().collect();
+    let child_keys: HashSet<Key> = child.iter().cloned().collect();
+    let missing_keys = all_keys.difference(&child_keys);
+    for key in missing_keys {
+        let dupe_i = find_duplicate_key_index(&child);
+        child[dupe_i] = *key;
+    }
+}
+
+fn find_duplicate_key_index(keys: &Vec<Key>) -> usize {
+    for i in 0..keys.len() {
+        for j in (i + 1)..keys.len() {
+            if keys[i] == keys[j] {
+                return j;
+            }
+        }
+    }
+    panic!("No duplicate key found");
 }
 
 impl Mutate for Layout {
     fn mutate<R: rand::Rng>(&mut self, rng: &mut R, rate: f32) {
         for i in 0..self.keys.len() {
             for j in (i + 1)..self.keys.len() {
-                let (_, rest) = self.keys.split_at_mut(i);
-                let (first, rest) = rest.split_first_mut().unwrap();
-                let (_, rest) = rest.split_at_mut(j - i - 1);
-                let (second, _) = rest.split_first_mut().unwrap();
-                match (first, second) {
-                    (
-                        Key::Normal {
-                            normal: p1_normal,
-                            shifted: p1_shifted,
-                        },
-                        Key::Normal {
-                            normal: p2_normal,
-                            shifted: p2_shifted,
-                        },
-                    ) => {
-                        if rng.gen_bool(rate as f64) {
-                            std::mem::swap(p1_normal, p2_normal);
-                        }
-                        if rng.gen_bool(rate as f64) {
-                            std::mem::swap(p1_shifted, p2_shifted);
-                        }
-                    }
-                    (first, second) => {
-                        if rng.gen_bool(rate as f64) {
-                            std::mem::swap(first, second);
-                        }
-                    }
+                if rng.gen_bool(rate as f64) {
+                    self.keys.swap(i, j);
                 }
             }
         }
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Key {
     Normal { normal: char, shifted: char },
     Backspace,
@@ -331,6 +635,13 @@ enum Key {
 }
 
 impl Key {
+    fn from_char_default_shifted(c: char) -> Self {
+        Key::Normal {
+            normal: c,
+            shifted: default_shifted(c),
+        }
+    }
+
     fn keycode(&self, shift: bool) -> Keycode {
         match self {
             Key::Normal { normal, shifted } => {
@@ -363,6 +674,26 @@ impl Key {
             Key::Up => Keycode::Up,
             Key::Down => Keycode::Down,
             Key::Delete => Keycode::Delete,
+        }
+    }
+}
+
+impl GridItem for Key {
+    fn num_items() -> usize {
+        2
+    }
+
+    fn get_item(&self, i: usize) -> Option<String> {
+        match i {
+            0 => {
+                let code = self.keycode(false);
+                Some(map_keycode_to_str(code).unwrap().to_string())
+            }
+            1 => {
+                let code = self.keycode(true);
+                Some(map_keycode_to_str(code).unwrap().to_string())
+            }
+            _ => None,
         }
     }
 }
@@ -468,103 +799,109 @@ fn char_to_keycode(c: char) -> Keycode {
     }
 }
 
-fn keycode_to_char(code: Keycode, shift: bool) -> char {
-    match (code, shift) {
-        (Keycode::A, false) => 'a',
-        (Keycode::B, false) => 'b',
-        (Keycode::C, false) => 'c',
-        (Keycode::D, false) => 'd',
-        (Keycode::E, false) => 'e',
-        (Keycode::F, false) => 'f',
-        (Keycode::G, false) => 'g',
-        (Keycode::H, false) => 'h',
-        (Keycode::I, false) => 'i',
-        (Keycode::J, false) => 'j',
-        (Keycode::K, false) => 'k',
-        (Keycode::L, false) => 'l',
-        (Keycode::M, false) => 'm',
-        (Keycode::N, false) => 'n',
-        (Keycode::O, false) => 'o',
-        (Keycode::P, false) => 'p',
-        (Keycode::Q, false) => 'q',
-        (Keycode::R, false) => 'r',
-        (Keycode::S, false) => 's',
-        (Keycode::T, false) => 't',
-        (Keycode::U, false) => 'u',
-        (Keycode::V, false) => 'v',
-        (Keycode::W, false) => 'w',
-        (Keycode::X, false) => 'x',
-        (Keycode::Y, false) => 'y',
-        (Keycode::Z, false) => 'z',
-        (Keycode::A, true) => 'A',
-        (Keycode::B, true) => 'B',
-        (Keycode::C, true) => 'C',
-        (Keycode::D, true) => 'D',
-        (Keycode::E, true) => 'E',
-        (Keycode::F, true) => 'F',
-        (Keycode::G, true) => 'G',
-        (Keycode::H, true) => 'H',
-        (Keycode::I, true) => 'I',
-        (Keycode::J, true) => 'J',
-        (Keycode::K, true) => 'K',
-        (Keycode::L, true) => 'L',
-        (Keycode::M, true) => 'M',
-        (Keycode::N, true) => 'N',
-        (Keycode::O, true) => 'O',
-        (Keycode::P, true) => 'P',
-        (Keycode::Q, true) => 'Q',
-        (Keycode::R, true) => 'R',
-        (Keycode::S, true) => 'S',
-        (Keycode::T, true) => 'T',
-        (Keycode::U, true) => 'U',
-        (Keycode::V, true) => 'V',
-        (Keycode::W, true) => 'W',
-        (Keycode::X, true) => 'X',
-        (Keycode::Y, true) => 'Y',
-        (Keycode::Z, true) => 'Z',
-        (Keycode::Key0, false) => '0',
-        (Keycode::Key1, false) => '1',
-        (Keycode::Key2, false) => '2',
-        (Keycode::Key3, false) => '3',
-        (Keycode::Key4, false) => '4',
-        (Keycode::Key5, false) => '5',
-        (Keycode::Key6, false) => '6',
-        (Keycode::Key7, false) => '7',
-        (Keycode::Key8, false) => '8',
-        (Keycode::Key9, false) => '9',
-        (Keycode::Key0, true) => ')',
-        (Keycode::Key1, true) => '!',
-        (Keycode::Key2, true) => '@',
-        (Keycode::Key3, true) => '#',
-        (Keycode::Key4, true) => '$',
-        (Keycode::Key5, true) => '%',
-        (Keycode::Key6, true) => '^',
-        (Keycode::Key7, true) => '&',
-        (Keycode::Key8, true) => '*',
-        (Keycode::Key9, true) => '(',
-        (Keycode::Minus, false) => '-',
-        (Keycode::Minus, true) => '_',
-        (Keycode::Equal, false) => '=',
-        (Keycode::Equal, true) => '+',
-        (Keycode::LeftBracket, false) => '[',
-        (Keycode::LeftBracket, true) => '{',
-        (Keycode::RightBracket, false) => ']',
-        (Keycode::RightBracket, true) => '}',
-        (Keycode::BackSlash, false) => '\\',
-        (Keycode::BackSlash, true) => '|',
-        (Keycode::Semicolon, false) => ';',
-        (Keycode::Semicolon, true) => ':',
-        (Keycode::Apostrophe, false) => '\'',
-        (Keycode::Apostrophe, true) => '"',
-        (Keycode::Comma, false) => ',',
-        (Keycode::Comma, true) => '<',
-        (Keycode::Dot, false) => '.',
-        (Keycode::Dot, true) => '>',
-        (Keycode::Slash, false) => '/',
-        (Keycode::Slash, true) => '?',
-        (Keycode::Space, _) => ' ',
-        (Keycode::Grave, false) => '`',
-        (Keycode::Grave, true) => '~',
-        (code, _) => unimplemented!("{:?}", code),
+fn keycode_to_char(code: Keycode) -> char {
+    match code {
+        Keycode::A => 'a',
+        Keycode::B => 'b',
+        Keycode::C => 'c',
+        Keycode::D => 'd',
+        Keycode::E => 'e',
+        Keycode::F => 'f',
+        Keycode::G => 'g',
+        Keycode::H => 'h',
+        Keycode::I => 'i',
+        Keycode::J => 'j',
+        Keycode::K => 'k',
+        Keycode::L => 'l',
+        Keycode::M => 'm',
+        Keycode::N => 'n',
+        Keycode::O => 'o',
+        Keycode::P => 'p',
+        Keycode::Q => 'q',
+        Keycode::R => 'r',
+        Keycode::S => 's',
+        Keycode::T => 't',
+        Keycode::U => 'u',
+        Keycode::V => 'v',
+        Keycode::W => 'w',
+        Keycode::X => 'x',
+        Keycode::Y => 'y',
+        Keycode::Z => 'z',
+        Keycode::Key0 => '0',
+        Keycode::Key1 => '1',
+        Keycode::Key2 => '2',
+        Keycode::Key3 => '3',
+        Keycode::Key4 => '4',
+        Keycode::Key5 => '5',
+        Keycode::Key6 => '6',
+        Keycode::Key7 => '7',
+        Keycode::Key8 => '8',
+        Keycode::Key9 => '9',
+        Keycode::Minus => '-',
+        Keycode::Equal => '=',
+        Keycode::LeftBracket => '[',
+        Keycode::RightBracket => ']',
+        Keycode::BackSlash => '\\',
+        Keycode::Semicolon => ';',
+        Keycode::Apostrophe => '\'',
+        Keycode::Comma => ',',
+        Keycode::Dot => '.',
+        Keycode::Slash => '/',
+        Keycode::Grave => '`',
+        Keycode::Space => ' ',
+        code => unimplemented!("{:?}", code),
+    }
+}
+
+fn default_shifted(c: char) -> char {
+    match c {
+        'a' => 'A',
+        'b' => 'B',
+        'c' => 'C',
+        'd' => 'D',
+        'e' => 'E',
+        'f' => 'F',
+        'g' => 'G',
+        'h' => 'H',
+        'i' => 'I',
+        'j' => 'J',
+        'k' => 'K',
+        'l' => 'L',
+        'm' => 'M',
+        'n' => 'N',
+        'o' => 'O',
+        'p' => 'P',
+        'q' => 'Q',
+        'r' => 'R',
+        's' => 'S',
+        't' => 'T',
+        'u' => 'U',
+        'v' => 'V',
+        'w' => 'W',
+        'x' => 'X',
+        'y' => 'Y',
+        'z' => 'Z',
+        '0' => ')',
+        '1' => '!',
+        '2' => '@',
+        '3' => '#',
+        '4' => '$',
+        '5' => '%',
+        '6' => '^',
+        '7' => '&',
+        '8' => '*',
+        '9' => '(',
+        '-' => '_',
+        '=' => '+',
+        '[' => '{',
+        ']' => '}',
+        '\\' => '|',
+        ';' => ':',
+        '\'' => '"',
+        ',' => '<',
+        '.' => '>',
+        '/' => '?',
+        '`' => '~',
+        _ => unimplemented!(),
     }
 }
