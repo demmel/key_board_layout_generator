@@ -1,4 +1,4 @@
-use keyboard_layout_generator::{process_log, Stats};
+use keyboard_layout_generator::stats::{process_log, Stats};
 
 fn main() {
     let start = std::time::Instant::now();
