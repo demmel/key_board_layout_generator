@@ -50,6 +50,115 @@
 //! This layout makes it easy to define a layout for a keyboard without having to
 //! consider the position of each key while writing something like JSON.
 
+macro_rules! enum_strings {
+    ($type:ty,$($variant:ident:$str:literal),*) => {
+        paste::paste! {
+            fn [<map_ $type:lower _to_str>] (variant: $type) -> Option<&'static str> {
+                match variant {
+                    $($type::$variant => Some($str),)*
+                    _ => None,
+                }
+            }
+
+            fn [<map_str_to_ $type:lower>](s: &str) -> Option<$type> {
+                match s {
+                    $($str => Some(<$type>::$variant),)*
+                    _ => None,
+                }
+            }
+        }
+    }
+}
+
+enum_strings! {
+    Keycode,
+    A: "A",
+    B: "B",
+    C: "C",
+    D: "D",
+    E: "E",
+    F: "F",
+    G: "G",
+    H: "H",
+    I: "I",
+    J: "J",
+    K: "K",
+    L: "L",
+    M: "M",
+    N: "N",
+    O: "O",
+    P: "P",
+    Q: "Q",
+    R: "R",
+    S: "S",
+    T: "T",
+    U: "U",
+    V: "V",
+    W: "W",
+    X: "X",
+    Y: "Y",
+    Z: "Z",
+    Key1: "1",
+    Key2: "2",
+    Key3: "3",
+    Key4: "4",
+    Key5: "5",
+    Key6: "6",
+    Key7: "7",
+    Key8: "8",
+    Key9: "9",
+    Key0: "0",
+    Grave: "~",
+    Tab: "Tab",
+    Escape: "Esc",
+    LShift: "LSh",
+    LControl: "LCt",
+    LAlt: "LAt",
+    LMeta: "LMt",
+    RShift: "RSh",
+    RControl: "RCt",
+    RAlt: "RAt",
+    RMeta: "RMt",
+    CapsLock: "Cap",
+    Left: "<--",
+    Right: "-->",
+    Backspace: "Bks",
+    Delete: "Del",
+    Home: "Hom",
+    End: "End",
+    PageDown: "PDn",
+    PageUp: "PUp",
+    Enter: "Etr",
+    Space: "Spc",
+    Up: "Up",
+    Down: "Dn",
+    LeftBracket: "[",
+    RightBracket: "]",
+    Comma: ",",
+    Dot: ".",
+    Slash: "/",
+    Semicolon: ";",
+    Apostrophe: "'",
+    BackSlash: "\\",
+    Minus: "-",
+    Equal: "="
+}
+
+enum_strings! {
+    FingerKind,
+    Pinky: "P",
+    Ring: "R",
+    Middle: "M",
+    Index: "I",
+    Thumb: "T"
+}
+
+enum_strings! {
+    Hand,
+    Left: "L",
+    Right: "R"
+}
+
 use crate::{Finger, FingerConfig, FingerKind, Hand, KeymapConfig, PhysicalKey, PhysicalKeyboard};
 use device_query::Keycode;
 
@@ -87,50 +196,12 @@ fn parse_score(score: &str) -> f64 {
 }
 
 fn parse_finger(finger: &str) -> Finger {
-    let finger = match finger {
-        "LP" => Finger {
-            hand: Hand::Left,
-            finger: FingerKind::Pinky,
-        },
-        "LR" => Finger {
-            hand: Hand::Left,
-            finger: FingerKind::Ring,
-        },
-        "LM" => Finger {
-            hand: Hand::Left,
-            finger: FingerKind::Middle,
-        },
-        "LI" => Finger {
-            hand: Hand::Left,
-            finger: FingerKind::Index,
-        },
-        "LT" => Finger {
-            hand: Hand::Left,
-            finger: FingerKind::Thumb,
-        },
-        "RT" => Finger {
-            hand: Hand::Right,
-            finger: FingerKind::Thumb,
-        },
-        "RI" => Finger {
-            hand: Hand::Right,
-            finger: FingerKind::Index,
-        },
-        "RM" => Finger {
-            hand: Hand::Right,
-            finger: FingerKind::Middle,
-        },
-        "RR" => Finger {
-            hand: Hand::Right,
-            finger: FingerKind::Ring,
-        },
-        "RP" => Finger {
-            hand: Hand::Right,
-            finger: FingerKind::Pinky,
-        },
-        _ => panic!("Invalid finger"),
-    };
-    finger
+    let (hand, finger) = finger.split_at(1);
+    let finger = finger.trim();
+    let hand = hand.trim();
+    let finger = map_str_to_fingerkind(finger).unwrap();
+    let hand = map_str_to_hand(hand).unwrap();
+    Finger { hand, finger }
 }
 
 fn parser_keys(lines: &mut std::str::Lines) -> PhysicalKeyboard {
@@ -196,80 +267,11 @@ fn parse_hr(lines: &mut std::str::Lines) {
 fn parse_keycodes(line: &str) -> Vec<Option<Keycode>> {
     let codes = parse_pipe_separated(line)
         .map(|s| {
-            Some(match s {
-                "A" => Keycode::A,
-                "B" => Keycode::B,
-                "C" => Keycode::C,
-                "D" => Keycode::D,
-                "E" => Keycode::E,
-                "F" => Keycode::F,
-                "G" => Keycode::G,
-                "H" => Keycode::H,
-                "I" => Keycode::I,
-                "J" => Keycode::J,
-                "K" => Keycode::K,
-                "L" => Keycode::L,
-                "M" => Keycode::M,
-                "N" => Keycode::N,
-                "O" => Keycode::O,
-                "P" => Keycode::P,
-                "Q" => Keycode::Q,
-                "R" => Keycode::R,
-                "S" => Keycode::S,
-                "T" => Keycode::T,
-                "U" => Keycode::U,
-                "V" => Keycode::V,
-                "W" => Keycode::W,
-                "X" => Keycode::X,
-                "Y" => Keycode::Y,
-                "Z" => Keycode::Z,
-                "1" => Keycode::Key1,
-                "2" => Keycode::Key2,
-                "3" => Keycode::Key3,
-                "4" => Keycode::Key4,
-                "5" => Keycode::Key5,
-                "6" => Keycode::Key6,
-                "7" => Keycode::Key7,
-                "8" => Keycode::Key8,
-                "9" => Keycode::Key9,
-                "0" => Keycode::Key0,
-                "~" => Keycode::Grave,
-                "Tab" => Keycode::Tab,
-                "Esc" => Keycode::Escape,
-                "LSh" => Keycode::LShift,
-                "LCt" => Keycode::LControl,
-                "LAt" => Keycode::LAlt,
-                "LMt" => Keycode::LMeta,
-                "RSh" => Keycode::RShift,
-                "RCt" => Keycode::RControl,
-                "RAt" => Keycode::RAlt,
-                "RMt" => Keycode::RMeta,
-                "Cap" => Keycode::CapsLock,
-                "<--" => Keycode::Left,
-                "-->" => Keycode::Right,
-                "Bks" => Keycode::Backspace,
-                "Del" => Keycode::Delete,
-                "Hom" => Keycode::Home,
-                "End" => Keycode::End,
-                "PDn" => Keycode::PageDown,
-                "PUp" => Keycode::PageUp,
-                "Etr" => Keycode::Enter,
-                "Spc" => Keycode::Space,
-                "Up" => Keycode::Up,
-                "Dn" => Keycode::Down,
-                "[" => Keycode::LeftBracket,
-                "]" => Keycode::RightBracket,
-                "," => Keycode::Comma,
-                "." => Keycode::Dot,
-                "/" => Keycode::Slash,
-                ";" => Keycode::Semicolon,
-                "'" => Keycode::Apostrophe,
-                "\\" => Keycode::BackSlash,
-                "-" => Keycode::Minus,
-                "=" => Keycode::Equal,
-                "" => return None,
-                x => panic!("Invalid key: {}", x),
-            })
+            if s.is_empty() {
+                None
+            } else {
+                Some(map_str_to_keycode(s).unwrap())
+            }
         })
         .collect();
     codes
