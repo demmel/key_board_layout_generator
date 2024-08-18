@@ -9,7 +9,7 @@ use keyboard_layout_generator::{
 use rand::{seq::SliceRandom, Rng};
 use rayon::prelude::*;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     io::{BufWriter, Write},
 };
 
@@ -20,6 +20,12 @@ struct Args {
 }
 
 fn main() {
+    // Leave one core so my UI doesn't lag
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(31)
+        .build_global()
+        .unwrap();
+
     let args = Args::parse();
     let stats = process_log(&args.log_file);
     println!("Max Possible Score: {}", max_possible_score(&stats));
@@ -95,7 +101,7 @@ fn save_best(keymap_config: &KeymapConfig, best: &Layout) {
         + 1;
 
     let mut best_grid = vec![vec![None; cols as usize]; rows as usize];
-    for (key, config) in best.keys.iter().zip(keymap_config.keys.keys().iter()) {
+    for (key, config) in best.keys().iter().zip(keymap_config.keys.keys().iter()) {
         best_grid[config.position.1 as usize][config.position.0 as usize] = Some(key.clone());
     }
 
@@ -119,9 +125,9 @@ fn simmulated_annealing(
     let mut best_score = score;
     loop {
         let mut new_layout = layout.clone();
-        let i = rng.gen_range(0..new_layout.keys.len());
-        let j = rng.gen_range(0..new_layout.keys.len());
-        new_layout.keys.swap(i, j);
+        let i = rng.gen_range(0..new_layout.keys().len());
+        let j = rng.gen_range(0..new_layout.keys().len());
+        new_layout.swap(i, j);
         let new_score = layout_score(&new_layout, &stats, &keymap_config);
         if new_score > best_score {
             best_layout = new_layout.clone();
@@ -156,7 +162,7 @@ fn max_possible_score(stats: &Stats) -> f64 {
 
 fn layout_similarity(l1: &Layout, l2: &Layout) -> f32 {
     let mut score = 0.0;
-    for (key1, key2) in l1.keys.iter().zip(l2.keys.iter()) {
+    for (key1, key2) in l1.keys().iter().zip(l2.keys().iter()) {
         let key1_code = key1.keycode(false);
         let key2_code = key2.keycode(false);
         if key1_code == key2_code {
@@ -168,7 +174,7 @@ fn layout_similarity(l1: &Layout, l2: &Layout) -> f32 {
             score += 1.0;
         }
     }
-    score / (l1.keys.len() * 2) as f32
+    score / (l1.keys().len() * 2) as f32
 }
 
 fn layout_score(layout: &Layout, stats: &Stats, keymap_config: &KeymapConfig) -> f64 {
@@ -390,13 +396,7 @@ fn get_physical_key_for_key<'a>(
     config: &'a KeymapConfig,
     key: &Key,
 ) -> &'a PhysicalKey {
-    layout
-        .keys
-        .iter()
-        .zip(config.keys.keys().iter())
-        .find(|(k, _)| *k == key)
-        .unwrap()
-        .1
+    &config.keys.keys()[layout.get(key)]
 }
 
 fn layout_consecutive_key_score(
@@ -406,10 +406,10 @@ fn layout_consecutive_key_score(
 ) -> f64 {
     let mut score = 0.0;
     for ((i, key1), (j, key2)) in layout
-        .keys
+        .keys()
         .iter()
         .enumerate()
-        .zip(layout.keys.iter().enumerate().skip(1))
+        .zip(layout.keys().iter().enumerate().skip(1))
     {
         let key1_code = key1.keycode(false);
         let key2_code = key2.keycode(false);
@@ -437,7 +437,7 @@ fn layout_individual_key_score(
     keymap_config: &KeymapConfig,
 ) -> f64 {
     let mut score = 0.0;
-    for (key, config) in layout.keys.iter().zip(keymap_config.keys.keys().iter()) {
+    for (key, config) in layout.keys().iter().zip(keymap_config.keys.keys().iter()) {
         let count = stats
             .individual_key_counts
             .get(&key.keycode(false))
@@ -507,6 +507,31 @@ fn consecutive_finger_score(f1: Finger, f2: Finger, distance: f64) -> f64 {
 #[derive(Clone, Debug)]
 struct Layout {
     keys: Vec<Key>,
+    key_map: HashMap<Key, usize>,
+}
+
+impl Layout {
+    fn new(keys: Vec<Key>) -> Self {
+        let mut key_map = HashMap::new();
+        for (i, key) in keys.iter().enumerate() {
+            key_map.insert(*key, i);
+        }
+        Self { keys, key_map }
+    }
+
+    fn swap(&mut self, i: usize, j: usize) {
+        self.keys.swap(i, j);
+        self.key_map.insert(self.keys[i], i);
+        self.key_map.insert(self.keys[j], j);
+    }
+
+    fn get(&self, key: &Key) -> usize {
+        *self.key_map.get(key).unwrap()
+    }
+
+    fn keys(&self) -> &[Key] {
+        &self.keys
+    }
 }
 
 impl Gen for Layout {
@@ -548,15 +573,15 @@ impl Gen for Layout {
             })
             .collect::<Vec<_>>();
         pool.shuffle(rng);
-        Self { keys: pool }
+        Self::new(pool)
     }
 }
 
 impl Crossover for Layout {
     fn crossover<R: rand::Rng>(&self, rng: &mut R, other: &Self) -> (Self, Self) {
-        let mut child1 = Vec::with_capacity(self.keys.len());
-        let mut child2 = Vec::with_capacity(self.keys.len());
-        for (key1, key2) in self.keys.iter().zip(other.keys.iter()) {
+        let mut child1 = Vec::with_capacity(self.keys().len());
+        let mut child2 = Vec::with_capacity(self.keys().len());
+        for (key1, key2) in self.keys().iter().zip(other.keys().iter()) {
             let (child1_key, child2_key) = {
                 if rng.gen_bool(0.5) {
                     (*key1, *key2)
@@ -567,13 +592,13 @@ impl Crossover for Layout {
             child1.push(child1_key);
             child2.push(child2_key);
         }
-        fix_missing_keys(&mut child1, &self.keys);
-        fix_missing_keys(&mut child2, &self.keys);
-        (Self { keys: child1 }, Self { keys: child2 })
+        fix_missing_keys(&mut child1, self.keys());
+        fix_missing_keys(&mut child2, self.keys());
+        (Layout::new(child1), Layout::new(child2))
     }
 }
 
-fn fix_missing_keys(child: &mut Vec<Key>, parent: &Vec<Key>) {
+fn fix_missing_keys(child: &mut Vec<Key>, parent: &[Key]) {
     let all_keys: HashSet<Key> = parent.iter().cloned().collect();
     let child_keys: HashSet<Key> = child.iter().cloned().collect();
     let missing_keys = all_keys.difference(&child_keys);
@@ -596,10 +621,10 @@ fn find_duplicate_key_index(keys: &Vec<Key>) -> usize {
 
 impl Mutate for Layout {
     fn mutate<R: rand::Rng>(&mut self, rng: &mut R, rate: f32) {
-        for i in 0..self.keys.len() {
-            for j in (i + 1)..self.keys.len() {
+        for i in 0..self.keys().len() {
+            for j in (i + 1)..self.keys().len() {
                 if rng.gen_bool(rate as f64) {
-                    self.keys.swap(i, j);
+                    self.swap(i, j);
                 }
             }
         }
