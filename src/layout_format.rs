@@ -50,10 +50,7 @@
 //! This layout makes it easy to define a layout for a keyboard without having to
 //! consider the position of each key while writing something like JSON.
 
-use crate::{
-    Finger, FingerConfig, FingerKind, Hand, KeymapConfig, PhysicalKey, PhysicalKeyboard,
-    SerializableKeycode,
-};
+use crate::{Finger, FingerConfig, FingerKind, Hand, KeymapConfig, PhysicalKey, PhysicalKeyboard};
 use device_query::Keycode;
 
 pub fn parse_keymap_config(layout: &str) -> KeymapConfig {
@@ -140,17 +137,14 @@ fn parser_keys(lines: &mut std::str::Lines) -> PhysicalKeyboard {
     let mut keys = PhysicalKeyboard::new();
     let mut r = 0;
     while let Some(row) = parse_row(lines) {
-        for (key, finger, score, c) in row {
-            if key.is_none() {
+        for (key, c) in row {
+            let Some((code, finger, score)) = key else {
                 continue;
-            }
-            let key = key.unwrap();
-            let finger = finger.unwrap();
-            let score = score.unwrap();
+            };
             keys.add_key(PhysicalKey {
-                code: SerializableKeycode(key),
+                code,
                 finger,
-                score_multiplier: score,
+                score,
                 position: (c as f64, r as f64),
             });
         }
@@ -159,9 +153,7 @@ fn parser_keys(lines: &mut std::str::Lines) -> PhysicalKeyboard {
     keys
 }
 
-fn parse_row(
-    lines: &mut std::str::Lines,
-) -> Option<Vec<(Option<Keycode>, Option<Finger>, Option<f64>, u8)>> {
+fn parse_row(lines: &mut std::str::Lines) -> Option<Vec<(Option<(Keycode, Finger, f64)>, u8)>> {
     parse_hr(lines);
     let line = lines.next()?;
     let codes = parse_keycodes(line);
@@ -185,7 +177,11 @@ fn parse_row(
         .into_iter()
         .zip(fingers.into_iter().zip(scores.into_iter()))
     {
-        row.push((key, finger, score, col));
+        if key.is_none() {
+            row.push((None, col));
+        } else {
+            row.push((Some((key.unwrap(), finger.unwrap(), score.unwrap())), col));
+        }
         col += 1;
     }
 

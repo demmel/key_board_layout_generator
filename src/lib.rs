@@ -209,13 +209,13 @@ fn translate_key_to_char(key: &Keycode, shift_held: bool) -> Option<char> {
     Some(c)
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct KeymapConfig {
     pub fingers: Vec<FingerConfig>,
     pub keys: PhysicalKeyboard,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct PhysicalKeyboard(Vec<PhysicalKey>);
 
 impl PhysicalKeyboard {
@@ -232,35 +232,12 @@ impl PhysicalKeyboard {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PhysicalKey {
-    pub code: SerializableKeycode,
-    pub finger: Finger,
-    pub score_multiplier: f64,
-    pub position: (f64, f64),
-}
-
 #[derive(Debug)]
-pub struct SerializableKeycode(pub Keycode);
-
-impl Serialize for SerializableKeycode {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.0.to_string().serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for SerializableKeycode {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let code = Keycode::from_str(s.as_str()).map_err(serde::de::Error::custom)?;
-        Ok(SerializableKeycode(code))
-    }
+pub struct PhysicalKey {
+    pub code: Keycode,
+    pub finger: Finger,
+    pub score: f64,
+    pub position: (f64, f64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
