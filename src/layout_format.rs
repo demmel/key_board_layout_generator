@@ -57,7 +57,7 @@ use std::fmt::{Display, Write};
 macro_rules! enum_strings {
     ($type:ty,$($variant:ident:$str:literal),*) => {
         paste::paste! {
-            fn [<map_ $type:lower _to_str>] (variant: $type) -> Option<&'static str> {
+            pub fn [<map_ $type:lower _to_str>] (variant: $type) -> Option<&'static str> {
                 match variant {
                     $($type::$variant => Some($str),)*
                     _ => None,
@@ -340,9 +340,46 @@ pub fn keymap_config_to_str(config: &KeymapConfig) -> Result<String, std::fmt::E
 
     let mut grid = vec![vec![None; cols as usize]; rows as usize];
     for key in keys.keys() {
-        grid[key.position.1 as usize][key.position.0 as usize] = Some(key);
+        grid[key.position.1 as usize][key.position.0 as usize] = Some(PhysicalKeyGridItem(key));
     }
 
+    write_grid(grid, &mut s, cols)?;
+
+    Ok(s)
+}
+
+pub trait GridItem {
+    fn num_items() -> usize;
+    fn get_item(&self, i: usize) -> Option<String>;
+}
+
+#[derive(Debug, Clone)]
+struct PhysicalKeyGridItem<'a>(&'a PhysicalKey);
+
+impl<'a> GridItem for PhysicalKeyGridItem<'a> {
+    fn num_items() -> usize {
+        3
+    }
+
+    fn get_item(&self, i: usize) -> Option<String> {
+        match i {
+            0 => Some(map_keycode_to_str(self.0.code).unwrap().to_string()),
+            1 => Some(format!(
+                "{}{}",
+                map_hand_to_str(self.0.finger.hand).unwrap(),
+                map_fingerkind_to_str(self.0.finger.finger).unwrap()
+            )),
+            2 => Some(((self.0.score * 100.0) as i32).to_string()),
+            _ => None,
+        }
+    }
+}
+
+pub fn write_grid<T: GridItem>(
+    grid: Vec<Vec<Option<T>>>,
+    s: &mut String,
+    cols: u8,
+) -> Result<(), std::fmt::Error> {
     for row in grid {
         write!(s, "-")?;
         for _ in 0..row.len() {
@@ -370,37 +407,20 @@ pub fn keymap_config_to_str(config: &KeymapConfig) -> Result<String, std::fmt::E
             writeln!(s)
         }
 
-        write_separated(
-            &mut s,
-            row.iter()
-                .map(|key| key.map(|key| map_keycode_to_str(key.code).unwrap())),
-        )?;
-        write_separated(
-            &mut s,
-            row.iter().map(|key| {
-                key.map(|key| {
-                    format!(
-                        "{}{}",
-                        map_hand_to_str(key.finger.hand).unwrap(),
-                        map_fingerkind_to_str(key.finger.finger).unwrap()
-                    )
-                })
-            }),
-        )?;
-        write_separated(
-            &mut s,
-            row.iter()
-                .map(|key| key.map(|key| (key.score * 100.0) as i32)),
-        )?;
+        for i in 0..T::num_items() {
+            write_separated(
+                s,
+                row.iter()
+                    .map(|key| key.as_ref().map(|key| key.get_item(i).unwrap_or_default())),
+            )?;
+        }
     }
-
     write!(s, "-")?;
     for _ in 0..cols {
         write!(s, "----")?;
     }
     writeln!(s)?;
-
-    Ok(s)
+    Ok(())
 }
 
 #[cfg(test)]
