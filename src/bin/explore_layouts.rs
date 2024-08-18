@@ -13,9 +13,23 @@ use std::{
     io::{BufWriter, Write},
 };
 
+/// A tool to explore different keyboard layouts using a
+/// genetic algorithm and simulated annealing.
+///
+/// Every iteration, the program will output the max, mean,
+/// and min scores of the current population, as well as the
+/// diversity of the population.  The program will also save
+/// the best layout to a file called `best.txt`.
+///
+/// The program will run indefinitely, so you will need to
+/// manually stop it when you are satisfied with the results.
 #[derive(Parser)]
 struct Args {
+    /// Path to the log file created by the keylogger.
     log_file: String,
+    /// Path to a keymap configuration file describing the
+    /// layout of the physical keyboard.  See the README for
+    /// more information.
     keymap_config: String,
 }
 

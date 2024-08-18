@@ -9,8 +9,12 @@ use std::{
 use clap::Parser;
 use device_query::{DeviceQuery, DeviceState};
 
+/// A simple keylogger that logs key presses and releases to a file.
 #[derive(Parser)]
 struct Args {
+    /// Path to the log file to store key presses and releases.  
+    /// If the file does not exist, it will be created, otherwise  
+    /// it will be appended to.
     log_file: String,
 }
 
