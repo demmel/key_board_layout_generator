@@ -1,9 +1,17 @@
+use clap::Parser;
 use keyboard_layout_generator::stats::{process_log, Stats};
+
+#[derive(Parser)]
+struct Args {
+    log_file: String,
+}
 
 fn main() {
     let start = std::time::Instant::now();
 
-    let stats = process_log("../keylogger/keys.log");
+    let args = Args::parse();
+
+    let stats = process_log(&args.log_file);
     print_statistics(&stats);
 
     let elapsed = start.elapsed();
