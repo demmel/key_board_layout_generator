@@ -1,3 +1,5 @@
+pub mod layout_format;
+
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
@@ -209,39 +211,33 @@ fn translate_key_to_char(key: &Keycode, shift_held: bool) -> Option<char> {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct KeymapConfig {
-    pub fingers: HashMap<Finger, FingerConfig>,
-    pub keys: Vec<KeyConfig>,
+    pub fingers: Vec<FingerConfig>,
+    pub keys: PhysicalKeyboard,
 }
 
-impl Default for KeymapConfig {
-    fn default() -> Self {
-        let mut fingers = HashMap::new();
-        for finger in &[
-            Finger::LeftPinky,
-            Finger::LeftRing,
-            Finger::LeftMiddle,
-            Finger::LeftIndex,
-            Finger::LeftThumb,
-            Finger::RightThumb,
-            Finger::RightIndex,
-            Finger::RightMiddle,
-            Finger::RightRing,
-            Finger::RightPinky,
-        ] {
-            fingers.insert(*finger, FingerConfig::default());
-        }
-        Self {
-            fingers,
-            keys: vec![],
-        }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PhysicalKeyboard(Vec<PhysicalKey>);
+
+impl PhysicalKeyboard {
+    pub fn new() -> Self {
+        Self(vec![])
+    }
+
+    pub fn add_key(&mut self, key: PhysicalKey) {
+        self.0.push(key);
+    }
+
+    pub fn keys(&self) -> &[PhysicalKey] {
+        &self.0
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct KeyConfig {
+pub struct PhysicalKey {
     pub code: SerializableKeycode,
     pub finger: Finger,
     pub score_multiplier: f64,
+    pub position: (f64, f64),
 }
 
 #[derive(Debug)]
@@ -267,27 +263,47 @@ impl<'de> Deserialize<'de> for SerializableKeycode {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum Finger {
-    LeftPinky,
-    LeftRing,
-    LeftMiddle,
-    LeftIndex,
-    LeftThumb,
-    RightThumb,
-    RightIndex,
-    RightMiddle,
-    RightRing,
-    RightPinky,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Finger {
+    pub hand: Hand,
+    pub finger: FingerKind,
+}
+
+impl Finger {
+    pub fn all() -> Vec<Self> {
+        let mut fingers = vec![];
+        for &hand in &[Hand::Left, Hand::Right] {
+            for &finger in &[
+                FingerKind::Pinky,
+                FingerKind::Ring,
+                FingerKind::Middle,
+                FingerKind::Index,
+                FingerKind::Thumb,
+            ] {
+                fingers.push(Finger { hand, finger });
+            }
+        }
+        fingers
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Hand {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FingerKind {
+    Pinky,
+    Ring,
+    Middle,
+    Index,
+    Thumb,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FingerConfig {
+    pub finger: Finger,
     pub score: f64,
-}
-
-impl Default for FingerConfig {
-    fn default() -> Self {
-        Self { score: 1.0 }
-    }
 }
