@@ -50,6 +50,10 @@
 //! This layout makes it easy to define a layout for a keyboard without having to
 //! consider the position of each key while writing something like JSON.
 
+use crate::{Finger, FingerConfig, FingerKind, Hand, KeymapConfig, PhysicalKey, PhysicalKeyboard};
+use device_query::Keycode;
+use std::fmt::{Display, Write};
+
 macro_rules! enum_strings {
     ($type:ty,$($variant:ident:$str:literal),*) => {
         paste::paste! {
@@ -158,9 +162,6 @@ enum_strings! {
     Left: "L",
     Right: "R"
 }
-
-use crate::{Finger, FingerConfig, FingerKind, Hand, KeymapConfig, PhysicalKey, PhysicalKeyboard};
-use device_query::Keycode;
 
 pub fn parse_keymap_config(layout: &str) -> KeymapConfig {
     let mut lines = layout.lines();
@@ -305,4 +306,112 @@ fn parse_pipe_separated(line: &str) -> impl Iterator<Item = &str> {
     let (_, line) = line.split_once("|").unwrap();
     let (line, _) = line.rsplit_once("|").unwrap();
     line.split("|").map(|s| s.trim())
+}
+
+pub fn keymap_config_to_str(config: &KeymapConfig) -> Result<String, std::fmt::Error> {
+    let mut s = String::new();
+    writeln!(s, "Fingers")?;
+    for finger in &config.fingers {
+        writeln!(
+            s,
+            "{}{}: {}",
+            map_hand_to_str(finger.finger.hand).unwrap(),
+            map_fingerkind_to_str(finger.finger.finger).unwrap(),
+            (finger.score * 100.0) as i32
+        )?;
+    }
+    writeln!(s)?;
+    writeln!(s, "Keys")?;
+    let keys = &config.keys;
+    let rows = keys
+        .keys()
+        .iter()
+        .map(|key| key.position.1 as u8)
+        .max()
+        .unwrap()
+        + 1;
+    let cols = keys
+        .keys()
+        .iter()
+        .map(|key| key.position.0 as u8)
+        .max()
+        .unwrap()
+        + 1;
+
+    let mut grid = vec![vec![None; cols as usize]; rows as usize];
+    for key in keys.keys() {
+        grid[key.position.1 as usize][key.position.0 as usize] = Some(key);
+    }
+
+    for row in grid {
+        write!(s, "-")?;
+        for _ in 0..row.len() {
+            write!(s, "----")?;
+        }
+        writeln!(s)?;
+
+        fn write_separated(
+            s: &mut String,
+            items: impl Iterator<Item = Option<impl Display>>,
+        ) -> Result<(), std::fmt::Error> {
+            write!(s, "|")?;
+            for item in items {
+                if let Some(item) = item {
+                    let item = item.to_string();
+                    if item.len() == 1 {
+                        write!(s, " {} |", item)?;
+                    } else {
+                        write!(s, "{:<3}|", item)?;
+                    }
+                } else {
+                    write!(s, "   |")?;
+                }
+            }
+            writeln!(s)
+        }
+
+        write_separated(
+            &mut s,
+            row.iter()
+                .map(|key| key.map(|key| map_keycode_to_str(key.code).unwrap())),
+        )?;
+        write_separated(
+            &mut s,
+            row.iter().map(|key| {
+                key.map(|key| {
+                    format!(
+                        "{}{}",
+                        map_hand_to_str(key.finger.hand).unwrap(),
+                        map_fingerkind_to_str(key.finger.finger).unwrap()
+                    )
+                })
+            }),
+        )?;
+        write_separated(
+            &mut s,
+            row.iter()
+                .map(|key| key.map(|key| (key.score * 100.0) as i32)),
+        )?;
+    }
+
+    write!(s, "-")?;
+    for _ in 0..cols {
+        write!(s, "----")?;
+    }
+    writeln!(s)?;
+
+    Ok(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_e2e() {
+        let s = include_str!("../kinesis.layout");
+        let config = parse_keymap_config(s);
+        let s2 = keymap_config_to_str(&config).unwrap();
+        assert_eq!(s, s2);
+    }
 }
