@@ -1,3 +1,4 @@
+use ahash::{HashMap, HashMapExt, HashSet};
 use clap::Parser;
 use device_query::Keycode;
 use genetic::{Crossover, DiversifyStrategy, Gen, Mutate};
@@ -9,7 +10,7 @@ use keyboard_layout_generator::{
 use rand::{seq::SliceRandom, Rng};
 use rayon::prelude::*;
 use std::{
-    collections::{HashMap, HashSet},
+    cell::LazyCell,
     io::{BufWriter, Write},
 };
 
@@ -42,7 +43,8 @@ fn main() {
 
     let args = Args::parse();
     let stats = process_log(&args.log_file);
-    println!("Max Possible Score: {}", max_possible_score(&stats));
+    let max_possible_score = max_possible_score(&stats);
+    println!("Max possible score: {}", max_possible_score);
     let keymap_str = std::fs::read_to_string(&args.keymap_config).unwrap();
     let keymap_config = parse_keymap_config(&keymap_str);
     let mut population = (0..1000)
@@ -112,6 +114,7 @@ fn simmulated_annealing(
     let mut temperature = 1.0;
     let mut best_layout = layout.clone();
     let mut best_score = score;
+    let max_possible_score = max_possible_score(&stats);
     loop {
         let mut new_layout = layout.clone();
         let i = rng.gen_range(0..new_layout.keys().len());
@@ -123,7 +126,7 @@ fn simmulated_annealing(
             best_score = new_score;
         }
         let delta = new_score - score;
-        let normalized_delta = delta / max_possible_score(&stats);
+        let normalized_delta = delta / max_possible_score;
         if delta > 0.0 || rng.gen_bool((normalized_delta / temperature).exp()) {
             layout = new_layout;
             score = new_score;
@@ -144,7 +147,7 @@ fn max_possible_score(stats: &Stats) -> f64 {
     for count in stats.consectutive_key_counts.values() {
         score += *count as f64;
     }
-    let n_intuitions = intuitions().len() as f64;
+    let n_intuitions = INTUITIONS.len() as f64;
     score += n_intuitions * 100.0;
     score
 }
@@ -169,7 +172,7 @@ fn layout_similarity(l1: &Layout, l2: &Layout) -> f32 {
 fn layout_score(layout: &Layout, stats: &Stats, keymap_config: &KeymapConfig) -> f64 {
     let individual_key_score = layout_individual_key_score(layout, stats, keymap_config);
     let consecutive_key_score = layout_consecutive_key_score(layout, stats, keymap_config);
-    let intuition_score = intuition_score(layout, keymap_config, &intuitions());
+    let intuition_score = intuition_score(layout, keymap_config, &INTUITIONS);
 
     individual_key_score + consecutive_key_score + 100.0 * intuition_score
 }
@@ -301,7 +304,7 @@ fn key(c: char) -> Key {
     Key::from_char_default_shifted(c)
 }
 
-fn intuitions() -> Vec<Intuition> {
+const INTUITIONS: LazyCell<Vec<Intuition>> = LazyCell::new(|| {
     use Key::*;
     vec![
         and(same_row(Left, Right), left_of(Left, Right)),
@@ -325,7 +328,7 @@ fn intuitions() -> Vec<Intuition> {
         close(key('5'), key('8')),
         close(key('6'), key('9')),
     ]
-}
+});
 
 fn are_symmetric(config: &KeymapConfig, pos1: (f64, f64), pos2: (f64, f64)) -> bool {
     if pos1.1 != pos2.1 {
