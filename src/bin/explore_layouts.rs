@@ -71,31 +71,6 @@ fn main() {
     }
 }
 
-fn genetic_algorithm(stats: &Stats, keymap_config: &KeymapConfig) {
-    let mut rng = rand::thread_rng();
-    let mut population = (0..10000)
-        .map(|_| Layout::gen(&mut rng, &keymap_config))
-        .collect::<Vec<_>>();
-    let mut generation = 0;
-    loop {
-        let (new_population, gstats) = genetic::evolve(
-            &population,
-            keymap_config,
-            |layout| layout_score(layout, stats, keymap_config) as f32,
-            layout_similarity,
-            DiversifyStrategy::HalfAreRandom,
-        );
-        population = new_population;
-        let best = &population[0];
-        save_best(keymap_config, best);
-        println!(
-            "G: {}, Max: {}, Mean: {}, Min: {}, Div: {}",
-            generation, gstats.max, gstats.mean, gstats.min, gstats.diversity,
-        );
-        generation += 1;
-    }
-}
-
 fn save_best(keymap_config: &KeymapConfig, best: &Layout) {
     let rows = keymap_config
         .keys
@@ -208,8 +183,8 @@ impl IntuitionPair {
         keymap_config: &'a KeymapConfig,
     ) -> (&'a PhysicalKey, &'a PhysicalKey) {
         (
-            get_physical_key_for_key(layout, keymap_config, &self.0).clone(),
-            get_physical_key_for_key(layout, keymap_config, &self.1).clone(),
+            get_physical_key_for_key(layout, keymap_config, &self.0),
+            get_physical_key_for_key(layout, keymap_config, &self.1),
         )
     }
 }
@@ -228,14 +203,6 @@ enum Intuition {
 }
 
 impl Intuition {
-    fn or(self, other: Self) -> Self {
-        Self::Or(Box::new(self), Box::new(other))
-    }
-
-    fn and(self, other: Self) -> Self {
-        Self::And(Box::new(self), Box::new(other))
-    }
-
     fn satisfied(&self, layout: &Layout, keymap_config: &KeymapConfig) -> bool {
         match self {
             Intuition::Close(pair) => {
@@ -290,100 +257,73 @@ fn intuition_score(layout: &Layout, keymap_config: &KeymapConfig, intuitions: &[
     score
 }
 
+fn close(key1: Key, key2: Key) -> Intuition {
+    Intuition::Close(IntuitionPair(key1, key2))
+}
+
+fn symmetric(key1: Key, key2: Key) -> Intuition {
+    Intuition::Symmetric(IntuitionPair(key1, key2))
+}
+
+fn same_row(key1: Key, key2: Key) -> Intuition {
+    Intuition::SameRow(IntuitionPair(key1, key2))
+}
+
+fn same_column(key1: Key, key2: Key) -> Intuition {
+    Intuition::SameColumn(IntuitionPair(key1, key2))
+}
+
+fn left_of(key1: Key, key2: Key) -> Intuition {
+    Intuition::LeftOf(IntuitionPair(key1, key2))
+}
+
+fn right_of(key1: Key, key2: Key) -> Intuition {
+    Intuition::RightOf(IntuitionPair(key1, key2))
+}
+
+fn above(key1: Key, key2: Key) -> Intuition {
+    Intuition::Above(IntuitionPair(key1, key2))
+}
+
+fn below(key1: Key, key2: Key) -> Intuition {
+    Intuition::Below(IntuitionPair(key1, key2))
+}
+
+fn or(a: Intuition, b: Intuition) -> Intuition {
+    Intuition::Or(Box::new(a), Box::new(b))
+}
+
+fn and(a: Intuition, b: Intuition) -> Intuition {
+    Intuition::And(Box::new(a), Box::new(b))
+}
+
+fn key(c: char) -> Key {
+    Key::from_char_default_shifted(c)
+}
+
 fn intuitions() -> Vec<Intuition> {
+    use Key::*;
     vec![
-        Intuition::and(
-            Intuition::SameRow(IntuitionPair(Key::Left, Key::Right)),
-            Intuition::LeftOf(IntuitionPair(Key::Left, Key::Right)),
-        ),
-        Intuition::and(
-            Intuition::SameColumn(IntuitionPair(Key::Up, Key::Down)),
-            Intuition::Above(IntuitionPair(Key::Up, Key::Down)),
-        ),
-        Intuition::or(
-            Intuition::Close(IntuitionPair(Key::Left, Key::Right)),
-            Intuition::Symmetric(IntuitionPair(Key::Left, Key::Right)),
-        ),
-        Intuition::or(
-            Intuition::Close(IntuitionPair(Key::Home, Key::End)),
-            Intuition::Symmetric(IntuitionPair(Key::Home, Key::End)),
-        ),
-        Intuition::or(
-            Intuition::Close(IntuitionPair(Key::PageUp, Key::PageDown)),
-            Intuition::Symmetric(IntuitionPair(Key::PageUp, Key::PageDown)),
-        ),
-        Intuition::or(
-            Intuition::Close(IntuitionPair(
-                Key::from_char_default_shifted('['),
-                Key::from_char_default_shifted(']'),
-            )),
-            Intuition::Symmetric(IntuitionPair(
-                Key::from_char_default_shifted('['),
-                Key::from_char_default_shifted(']'),
-            )),
-        ),
-        Intuition::Symmetric(IntuitionPair(Key::LShift, Key::RShift)),
-        Intuition::Symmetric(IntuitionPair(Key::LCtrl, Key::RCtrl)),
-        Intuition::Close(IntuitionPair(
-            Key::from_char_default_shifted('1'),
-            Key::from_char_default_shifted('2'),
-        )),
-        Intuition::Close(IntuitionPair(
-            Key::from_char_default_shifted('2'),
-            Key::from_char_default_shifted('3'),
-        )),
-        Intuition::Close(IntuitionPair(
-            Key::from_char_default_shifted('3'),
-            Key::from_char_default_shifted('4'),
-        )),
-        Intuition::Close(IntuitionPair(
-            Key::from_char_default_shifted('4'),
-            Key::from_char_default_shifted('5'),
-        )),
-        Intuition::Close(IntuitionPair(
-            Key::from_char_default_shifted('5'),
-            Key::from_char_default_shifted('6'),
-        )),
-        Intuition::Close(IntuitionPair(
-            Key::from_char_default_shifted('6'),
-            Key::from_char_default_shifted('7'),
-        )),
-        Intuition::Close(IntuitionPair(
-            Key::from_char_default_shifted('7'),
-            Key::from_char_default_shifted('8'),
-        )),
-        Intuition::Close(IntuitionPair(
-            Key::from_char_default_shifted('8'),
-            Key::from_char_default_shifted('9'),
-        )),
-        Intuition::Close(IntuitionPair(
-            Key::from_char_default_shifted('9'),
-            Key::from_char_default_shifted('0'),
-        )),
-        Intuition::Close(IntuitionPair(
-            Key::from_char_default_shifted('1'),
-            Key::from_char_default_shifted('4'),
-        )),
-        Intuition::Close(IntuitionPair(
-            Key::from_char_default_shifted('2'),
-            Key::from_char_default_shifted('5'),
-        )),
-        Intuition::Close(IntuitionPair(
-            Key::from_char_default_shifted('3'),
-            Key::from_char_default_shifted('6'),
-        )),
-        Intuition::Close(IntuitionPair(
-            Key::from_char_default_shifted('4'),
-            Key::from_char_default_shifted('7'),
-        )),
-        Intuition::Close(IntuitionPair(
-            Key::from_char_default_shifted('5'),
-            Key::from_char_default_shifted('8'),
-        )),
-        Intuition::Close(IntuitionPair(
-            Key::from_char_default_shifted('6'),
-            Key::from_char_default_shifted('9'),
-        )),
+        and(same_row(Left, Right), left_of(Left, Right)),
+        and(same_column(Up, Down), above(Up, Down)),
+        or(close(Left, Right), symmetric(Left, Right)),
+        or(close(Up, Down), symmetric(Up, Down)),
+        or(close(PageUp, PageDown), symmetric(PageUp, PageDown)),
+        or(close(key('['), key(']')), symmetric(key('['), key(']'))),
+        symmetric(LShift, RShift),
+        symmetric(LCtrl, RCtrl),
+        close(key('1'), key('2')),
+        close(key('2'), key('3')),
+        close(key('4'), key('5')),
+        close(key('5'), key('6')),
+        close(key('7'), key('8')),
+        close(key('8'), key('9')),
+        close(key('1'), key('4')),
+        close(key('2'), key('5')),
+        close(key('3'), key('6')),
+        close(key('4'), key('7')),
+        close(key('5'), key('8')),
+        close(key('6'), key('9')),
     ]
 }
 
